@@ -45,4 +45,4 @@ $xlate->apply($PPI_doc)
 my $got_code_out = $PPI_doc->serialize;
 
 print $got_code_out;
-print STDERR join("\n", @warnings), "\n";
+#print STDERR join("\n", @warnings), "\n";

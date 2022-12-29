@@ -131,6 +131,7 @@ sub _convert_Perl5_PPI_to_Perl6_PPI {
     $change_count += $self->_translate_all_ops($PPI_doc);
     $change_count += $self->_change_interpolations($PPI_doc);
     $change_count += $self->_change_sigils($PPI_doc);
+    $change_count += $self->_change_magic_symbols($PPI_doc);
     $change_count += $self->_change_regex($PPI_doc);
     $change_count += $self->_change_print_fh($PPI_doc);
     $change_count += $self->_change_octal($PPI_doc);
@@ -143,6 +144,7 @@ sub _convert_Perl5_PPI_to_Perl6_PPI {
     $change_count += $self->_change_foreach_my_lexvar_to_arrow($PPI_doc);
     $change_count += $self->_change_c_style_for_to_loop($PPI_doc);
     $change_count += $self->_remove_obsolete_pragmas_and_shbang($PPI_doc);
+    $change_count += $self->_change_dircopy($PPI_doc);
     $change_count += $self->_optionally_change_qw_to_arrow_quotes($PPI_doc);
     $change_count += $self->_remove_parens_from_conditionals($PPI_doc);
     $change_count += $self->_move_sub_params_from_at_to_declaration($PPI_doc);
@@ -324,10 +326,11 @@ sub _change_interpolations {
     for my $quote ( _get_all( $PPI_doc, 'Token::Quote::Double' ) ) {
 	next unless $quote->interpolations;
 	my $str = $quote->string();
-	$str =~ s/\$\{/{\$/g;
-	$str =~ s/\$(\w+\{)/%$1/g;
-	$str =~ s/\$(ARGV)\b/\@*$1/g;
-	$str =~ s/\$(\w+\[)/\@$1/g;
+	$str =~ s/(?<=\\)\$\{/{\$/g;
+	$str =~ s/(?<=\\)\$(\w+\{)/%$1/g;
+	$str =~ s/(?<=\\)\$(ARGV)\b/\@*$1/g;
+	$str =~ s/(?<=\\)\$(\w+\[)/\@$1/g;
+	$str =~ s/(?<=\\)\$(\d)/\${$1-1}/eg;
 	$quote->set_content( "\"$str\"" );
 	$count++;
     }
@@ -843,6 +846,59 @@ sub _change_c_style_for_to_loop {
         }
 
         $count++;
+    }
+    return $count;
+}
+
+sub _change_dircopy {
+    croak 'Wrong number of arguments passed to method' if @_ != 2;
+    my ( $self, $PPI_doc ) = @_;
+    croak 'Parameter 2 must be a PPI::Document!' if !_INSTANCE($PPI_doc, 'PPI::Document');
+    my $count = 0;
+    for my $include ( _get_all( $PPI_doc, 'Statement::Include' ) ) {
+        if ( $include =~ m{ \A \s* use \s+ File::Copy::Recursive .+dircopy.\s* [;]? \s* \z }msx ) {
+	    my $dircopy = PPI::Statement->new('');#sub dircopy() {}');
+
+	    $dircopy->add_element(PPI::Token::Word->new("sub"));
+	    $dircopy->add_element(PPI::Token::Whitespace->new(' '));
+	    $dircopy->add_element(PPI::Token::Word->new("dircopy"));
+	    $dircopy->add_element(PPI::Token::Prototype->new('($dir,$dir1)'));
+	    $dircopy->add_element(PPI::Token::Whitespace->new(' '));
+	    $dircopy->add_element(PPI::Token::Structure->new('{'));
+	    $dircopy->add_element(PPI::Token::Word->new('
+    mkdir $dir1;
+    chdir $dir;
+    my @todo = ".".IO;
+    while @todo {
+        for @todo.pop.dir -> $path {
+            mkdir "../$dir1/$path" if $path.d;
+            copy $path, "../$dir1/$path" if $path.f;
+            @todo.push: $path if $path.d;
+        }
+    }
+    chdir "..";'));
+	    $dircopy->add_element(PPI::Token::Structure->new('}'));
+	    $include->insert_after($dircopy);
+	    $include->delete();
+	    $count++;
+	}
+    }
+
+    return $count;
+}
+
+sub _change_magic_symbols {
+    croak 'Wrong number of arguments passed to method' if @_ != 2;
+    my ( $self, $PPI_doc ) = @_;
+    croak 'Parameter 2 must be a PPI::Document!' if !_INSTANCE($PPI_doc, 'PPI::Document');
+
+    my $count = 0;
+    for my $var (_get_all($PPI_doc, 'Token::Magic')) {
+	next unless $var =~ /\d$/;
+
+	$_ = $var->content;
+	$var->set_content(s/\d$/{$&-1}/er);
+	$count++;
     }
     return $count;
 }
